@@ -74,6 +74,10 @@ READY
 
 To help understand all the tn3270 commands and the various stages of the connection debugging is included with this library. To enable simple debugging use `tn3270.set_debuglevel(1)` to increase the verbosity you can set debugging to level 2 `tn3270.set_debuglevel(2)` but it explains every tn3270 command and push to the buffer but can aid in understanding what it happening behind the scenes.
 
+## LU Setting
+
+This library also supports selecting a specific LU. Use the function `set_LU("LUNAME")` to set the LU you want to use priot to initiating a connection.
+
 ## File Transfer
 
 With this library you can now send and receive files/datasets EBCDIC to ASCII translation is done by z/OS if you use the get/send_ascii functions

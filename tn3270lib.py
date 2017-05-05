@@ -513,6 +513,10 @@ class TN3270:
 		"""
 		self.debuglevel = debuglevel
 
+        def set_LU(self, LU):
+                """ Sets an LU to use on connection """
+                self.connected_lu = LU
+
 	def disable_enhanced(self, disable=True):
 		self.msg(1,'Disabling TN3270E Option')
 		if disable:
@@ -630,7 +634,9 @@ class TN3270:
 		while not self.first_screen:
 			self.telnet_data = self.recv_data()
 			self.msg(2,"Got telnet_data: %r", self.telnet_data)
-			self.process_packets()
+			r = self.process_packets()
+			if not r: 
+				return False
 		return True
 
 	def get_data( self ):
@@ -681,9 +687,11 @@ class TN3270:
 	def process_packets( self ):
 		""" Processes Telnet data """
 		for i in self.telnet_data:
-			#self.msg(1,"Processing: %r", i)
-			self.ts_processor(i)
+			self.msg(2,"Processing: %r", i)
+			r = self.ts_processor(i)
+			if not r: return False
 			self.telnet_data = '' #once all the data has been processed we clear out the buffer
+		return True
 
 	def ts_processor( self, data ):
 		""" Consumes/Interprets Telnet/TN3270 data """
@@ -794,6 +802,7 @@ class TN3270:
 			elif self.client_options.get(options['TN3270'], False) and self.sb_options[0] == options['TN3270']:
 			  if not self.negotiate_tn3270():
 				return False
+		return True
 
 	def negotiate_tn3270(self):
 		""" Negotiates TN3270E Options. Which are different than Telnet 
@@ -826,9 +835,16 @@ class TN3270:
 		if self.sb_options[1] ==  TN3270E_SEND:
 			if self.sb_options[2] == TN3270E_DEVICE_TYPE:
 				DEVICE_TYPE = 'IBM-3278-2-E'
-				self.msg(1,">> IAC SB TN3270 TN3270E_DEVICE_TYPE TN3270E_REQUEST %s IAC SE", DEVICE_TYPE)
-				self.send_data(IAC + SB + options['TN3270'] + TN3270E_DEVICE_TYPE + TN3270E_REQUEST + DEVICE_TYPE + IAC + SE)
+				if self.connected_lu == '':
+					self.msg(1,">> IAC SB TN3270 TN3270E_DEVICE_TYPE TN3270E_REQUEST %s IAC SE", DEVICE_TYPE)
+					self.send_data(IAC + SB + options['TN3270'] + TN3270E_DEVICE_TYPE + TN3270E_REQUEST + DEVICE_TYPE + IAC + SE)
+				else:
+					self.msg(1,">> IAC SB TN3270 TN3270E_DEVICE_TYPE TN3270E_REQUEST "+DEVICE_TYPE+" CONNECT "+self.connected_lu+" IAC SE")
+					self.send_data(IAC + SB + options['TN3270'] + TN3270E_DEVICE_TYPE + TN3270E_REQUEST + DEVICE_TYPE + TN_CONNECT + self.connected_lu + IAC + SE)
 		elif self.sb_options[1] == TN3270E_DEVICE_TYPE:
+			if self.sb_options[2] == TN3270E_REJECT:
+				self.msg(1, 'Received TN3270E_REJECT after sending LU %s', self.connected_lu)
+				return False
 			SE_location = self.sb_options.find(SE)
 			CONNECT_option = self.sb_options.find(TN3270E_CONNECT)
 			if CONNECT_option > 1 and CONNECT_option < SE_location:
@@ -850,7 +866,7 @@ class TN3270:
 			else:
 				self.msg(1,"TN3270 Negotiation Complete!")
 			## At this point we should be done negotiating options and recieve tn3270 data with a tn3270e header
-
+		return True
 
 	#def tn3270e_options(self, option_type):
 
@@ -1029,7 +1045,8 @@ class TN3270:
 				prev = 'SBA'
 				# the current position is SBA, the next two bytes are the lengths
 				i = i + 3
-				self.msg(2,"Next Command: %r",data[i])
+				if len(data) > i:
+					self.msg(2,"Next Command: %r",data[i])
 			elif cp == IC: # Insert Cursor
 				self.msg(1,"Insert Cursor (IC) 0x13")
 				self.msg(2,"Current Cursor Address: %r" , self.cursor_addr)
