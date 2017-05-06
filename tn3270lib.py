@@ -1660,6 +1660,16 @@ class TN3270:
 
 		return self.send_tn3270(self.output_buffer)
 
+        def send_enter( self ):
+                self.output_buffer = []
+                self.msg(1,"Generating Output Buffer for send_enter")
+                self.output_buffer.append(ENTER)
+                self.msg(1,"Cursor Location ("+ str(self.cursor_addr) +"): Row: %r, Column: %r ",
+                        self.BA_TO_ROW(self.cursor_addr),
+                        self.BA_TO_COL(self.cursor_addr) )
+                self.output_buffer.append(self.ENCODE_BADDR(self.cursor_addr))
+                return self.send_tn3270(self.output_buffer)
+
 	def hexdump(self, src, length=8):
 		""" Used to debug connection issues """
 		result = []
