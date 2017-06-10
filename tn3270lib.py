@@ -667,10 +667,18 @@ class TN3270:
 		    sent so far """
 		self.first_screen = False
 		self.sock.settimeout(2)
-		while True:
+                count = 0
+		while True and count <=200:
 			try:
 				self.telnet_data = self.recv_data()
-				self.msg(1,"Recv'd %i bytes", len(self.telnet_data))
+                                
+                                # Needed when mainframe closes socket on us
+                                if len(self.telnet_data) > 0:
+				    self.msg(1,"Recv'd %i bytes", len(self.telnet_data))
+                                else:
+                                    count += 1
+                                    if count % 100: self.msg(1,'Receiving 0 bytes')
+                                    
 				self.process_packets()
 			except socket.timeout, e:
 				err = e.args[0]
