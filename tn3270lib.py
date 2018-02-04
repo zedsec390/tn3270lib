@@ -689,7 +689,7 @@ class TN3270:
 			except socket.error, e:
 		        # Something else happened, handle error, exit, etc.
 				self.msg(1,"Error Received: %r", e)
-				#break
+				break
 		self.sock.settimeout(None)
 
 	def process_packets( self ):
