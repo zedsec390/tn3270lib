@@ -553,9 +553,9 @@ class TN3270:
 			this function takes two bytes (buffer addresses are two bytes long) and returns
 			the decoded buffer address."""
 		if (byte1 & 0xC0) == 0:
-			return (((byte1 & 0x3F) << 8) | byte2) + 1
+			return (((byte1 & 0x3F) << 8) | byte2) 
 		else:
-			return ((byte1 & 0x3F) << 6) | (byte2 & 0x3F)
+			return ((byte1 & 0x3F) << 6) | (byte2 & 0x3F)  
 
 	def ENCODE_BADDR(self, address):
 		""" Encodes Buffer Addresses """
@@ -695,7 +695,7 @@ class TN3270:
 	def process_packets( self ):
 		""" Processes Telnet data """
 		for i in self.telnet_data:
-			self.msg(2,"Processing: %r", i)
+			self.msg(3,"Processing: %r", i)
 			r = self.ts_processor(i)
 			if not r: return False
 			self.telnet_data = '' #once all the data has been processed we clear out the buffer
@@ -1017,11 +1017,11 @@ class TN3270:
 				i = i + 1 # skip SF
 				self.msg(2,"Writting Zero to buffer at address: %r",self.buffer_address)
 				self.msg(2,"Attribute Type: %r", data[i])
+				self.write_char("\00")
 				self.buffer_address = self.INC_BUF_ADDR(self.buffer_address)
 				self.write_field_attribute(data[i])
 				#set the current position one ahead (after SF)
 				i = i + 1
-				self.write_char("\00")
 
 			elif cp == SFE:
 				self.msg(2,"Start Field Extended")
@@ -1135,9 +1135,9 @@ class TN3270:
 			else: # whoa we made it.
 				ascii_char = cp.decode('EBCDIC-CP-BE').encode('utf-8')
 				self.msg(2,"Inserting "+ ascii_char + " (%r) at the following location:", data[i])
-				self.msg(2,"Row: %r" , self.BA_TO_ROW(self.buffer_address))
-				self.msg(2,"Col: %r" , self.BA_TO_COL(self.buffer_address))
-				self.msg(2,"Buffer Address: %r" , self.buffer_address)
+				self.msg(2,"  Row: %r" , self.BA_TO_ROW(self.buffer_address))
+				self.msg(2,"  Col: %r" , self.BA_TO_COL(self.buffer_address))
+				self.msg(2,"  Buffer Address: %r" , self.buffer_address)
 				self.write_char(data[i])
 				self.buffer_address = self.INC_BUF_ADDR(self.buffer_address)
 				self.first_screen = True
@@ -1146,20 +1146,15 @@ class TN3270:
 	    # end of while loop
     		self.formatted = True
 
-    
-
-
-
-
 	def write_char( self, char ):
 		""" Writes a character to the screen buffer.
 		    If a character already exists at that location,
 		    write the char in the screen buffer to a backup buffer """
-		if self.buffer[self.buffer_address-1] == "\0":
-			self.buffer[self.buffer_address-1] = char
+		if self.buffer[self.buffer_address] == "\0":
+			self.buffer[self.buffer_address] = char
 		else:
-			self.overwrite_buf[self.buffer_address-1] = self.buffer[self.buffer_address]
-			self.buffer[self.buffer_address-1] = char
+			self.overwrite_buf[self.buffer_address] = self.buffer[self.buffer_address]
+			self.buffer[self.buffer_address] = char
 
 	def write_field_attribute( self, attr ):
 		""" Writes Field attributes to the field attribute buffer """
@@ -1175,6 +1170,7 @@ class TN3270:
 		self.msg(1,"Generating the current TN3270 buffer in ASCII")
 		buff = ''
 		i = 1
+
 		for line in self.buffer:
 			if line == "\0":
 				buff += " "
