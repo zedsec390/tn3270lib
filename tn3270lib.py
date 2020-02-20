@@ -1664,15 +1664,36 @@ class TN3270:
 
 		return self.send_tn3270(self.output_buffer)
 
-        def send_enter( self ):
-                self.output_buffer = []
-                self.msg(1,"Generating Output Buffer for send_enter")
-                self.output_buffer.append(ENTER)
-                self.msg(1,"Cursor Location ("+ str(self.cursor_addr) +"): Row: %r, Column: %r ",
-                        self.BA_TO_ROW(self.cursor_addr),
-                        self.BA_TO_COL(self.cursor_addr) )
-                self.output_buffer.append(self.ENCODE_BADDR(self.cursor_addr))
-                return self.send_tn3270(self.output_buffer)
+	def send_aid( self, aid ):
+		""" Sends an F1 through F24 """
+		aid = aid.upper()
+		aids = ['NO','QREPLY','ENTER','PF1','PF2','PF3','PF4','PF5','PF6',
+				'PF7','PF8','PF9','PF10','PF11','PF12','PF13','PF14','PF15','PF16',
+				'PF17','PF18','PF19','PF20','PF21','PF22','PF23','PF24','OICR',
+				'MSR_MHS','SELECT','PA1','PA2','PA3','CLEAR','SYSREQ']
+	  	if aid not in aids :
+	  		self.msg(1,"%s not a valid AID", aid)
+	  		return False
+  	
+		self.output_buffer = []
+		self.msg(1,"Generating Output Buffer for send_aid: %s", aid)
+		self.output_buffer.append(eval(aid))
+		self.msg(1,"Cursor Location ("+ str(self.cursor_addr) +"): Row: %r, Column: %r ",
+					self.BA_TO_ROW(self.cursor_addr),
+					self.BA_TO_COL(self.cursor_addr) )
+		self.output_buffer.append(self.ENCODE_BADDR(self.cursor_addr))
+
+		return self.send_tn3270(self.output_buffer)
+
+	def send_enter( self ):
+			self.output_buffer = []
+			self.msg(1,"Generating Output Buffer for send_enter")
+			self.output_buffer.append(ENTER)
+			self.msg(1,"Cursor Location ("+ str(self.cursor_addr) +"): Row: %r, Column: %r ",
+					self.BA_TO_ROW(self.cursor_addr),
+					self.BA_TO_COL(self.cursor_addr) )
+			self.output_buffer.append(self.ENCODE_BADDR(self.cursor_addr))
+			return self.send_tn3270(self.output_buffer)
 
 	def hexdump(self, src, length=8):
 		""" Used to debug connection issues """
