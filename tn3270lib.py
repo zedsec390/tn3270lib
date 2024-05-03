@@ -1,3 +1,4 @@
+#!/usr/bin/env python2
 # TN3270 Library based heavily on x3270 and python telnet lib
 # Created by Phil "Soldier of Fortran" Young
 #
