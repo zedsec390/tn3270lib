@@ -16,7 +16,7 @@ docs/_build/
 .venv/
 venv/
 env/
-
+menv/
 # Test / coverage artifacts
 .pytest_cache/
 .mypy_cache/
