@@ -2,6 +2,7 @@
 
 from .constants import *
 from .transport import _bytes
+from .bind import parse_bind_image
 
 
 class TelnetMixin:
@@ -10,7 +11,7 @@ class TelnetMixin:
         def process_packets( self ):
                 """ Processes Telnet data """
                 for i in self.telnet_data:
-                        self.msg(3,"Processing: %r", i)
+                        self.msg(2,"Processing: %r", i)
                         r = self.ts_processor(i)
                         if not r: return False
                         self.telnet_data = b'' #once all the data has been processed we clear out the buffer
@@ -37,11 +38,17 @@ class TelnetMixin:
                         ## got an IAC
                         self.telnet_state = TNS_IAC
                         return True
+                  if self.state not in (TN3270_DATA, TN3270E_DATA):
+                        self._append_nvt(data)
+                        return True
                   self.store3270(data)
                 elif self.telnet_state == TNS_IAC:
                   if data == IAC:
                         ## insert this 0xFF in to the buffer
-                        self.store3270(data)
+                        if self.state not in (TN3270_DATA, TN3270E_DATA):
+                          self._append_nvt(data)
+                        else:
+                          self.store3270(data)
                         self.telnet_state = TNS_DATA
                   elif data == TN_EOR:
                         ## we're at the end of the TN3270 data
@@ -60,6 +67,11 @@ class TelnetMixin:
                   elif data == SB  : 
                         self.telnet_state = TNS_SB
                         self.sb_options = bytearray()
+                  else:
+                        # RFC 854 NOP / DM / GA / ... and any other unknown IAC:
+                        # ignore and return to data. Do not leave TNS_IAC.
+                        self.msg(2, "Ignoring IAC 0x%02x", data)
+                        self.telnet_state = TNS_DATA
                 elif self.telnet_state == TNS_WILL:
                    if data in supported_options and not (data in self.unsupported_opts) :
                         self.msg(1, "<< IAC WILL %s", supported_options[data])
@@ -108,10 +120,12 @@ class TelnetMixin:
                   else:
                         self.sb_options.append(data)
                 elif self.telnet_state == TNS_SB_IAC:
-                  #self.msg(1,"<< IAC SB")
-                  self.sb_options.append(data)
-                  if data == SE:
-                        #self.msg(1,"Found 'SE' %r", self.sb_options)
+                  if data == IAC:
+                        # IAC IAC inside SB is a literal 0xFF.
+                        self.sb_options.append(IAC)
+                        self.telnet_state = TNS_SB
+                  elif data == SE:
+                        self.sb_options.append(data)
                         self.telnet_state = TNS_DATA
                         if self.state != TN3270E_DATA:
                                 phrase = ''
@@ -121,13 +135,20 @@ class TelnetMixin:
                                         elif i in supported_options: phrase += supported_options[i] + ' '
                                         else: phrase += '\\x%02x ' % i
                                 self.msg(1,"<< IAC SB %s", phrase)
-                        if (self.sb_options[0] == options['TTYPE'] and
+                        dtype = getattr(self, 'device_type', DEVICE_TYPE)
+                        if (len(self.sb_options) >= 2 and
+                            self.sb_options[0] == options['TTYPE'] and
                             self.sb_options[1] == SEND ):
                           self.msg(1,">> IAC SB TTYPE IS DEVICE_TYPE IAC SE")
-                          self.send_data(_bytes(IAC, SB, options['TTYPE'], IS, DEVICE_TYPE, IAC, SE))
-                        elif self.client_options.get(options['TN3270'], False) and self.sb_options[0] == options['TN3270']:
+                          self.send_data(_bytes(IAC, SB, options['TTYPE'], IS, dtype, IAC, SE))
+                        elif (self.sb_options and
+                              self.client_options.get(options['TN3270'], False) and
+                              self.sb_options[0] == options['TN3270']):
                           if not self.negotiate_tn3270():
                                 return False
+                  else:
+                        # Malformed SB (IAC not doubled and not SE): drop back to SB.
+                        self.telnet_state = TNS_SB
                 return True
 
         def negotiate_tn3270(self):
@@ -158,16 +179,25 @@ class TelnetMixin:
                         else: phrase += '\\x%02x ' % i
                 self.msg(1,"<< IAC SB %s", phrase)
                 #print self.hexdump(self.sb_options)
+                if len(self.sb_options) < 2:
+                        self.msg(1,"TN3270E subnegotiation too short")
+                        return True
                 if self.sb_options[1] ==  TN3270E_SEND:
+                        if len(self.sb_options) < 3:
+                                self.msg(1,"TN3270E SEND subnegotiation too short")
+                                return True
                         if self.sb_options[2] == TN3270E_DEVICE_TYPE:
-                                DEVICE_TYPE = 'IBM-3278-2-E'
+                                dtype = getattr(self, 'device_type', DEVICE_TYPE)
                                 if self.connected_lu == '':
-                                        self.msg(1,">> IAC SB TN3270 TN3270E_DEVICE_TYPE TN3270E_REQUEST %s IAC SE", DEVICE_TYPE)
-                                        self.send_data(_bytes(IAC, SB, options['TN3270E'], TN3270E_DEVICE_TYPE, TN3270E_REQUEST, DEVICE_TYPE, IAC, SE))
+                                        self.msg(1,">> IAC SB TN3270 TN3270E_DEVICE_TYPE TN3270E_REQUEST %s IAC SE", dtype)
+                                        self.send_data(_bytes(IAC, SB, options['TN3270E'], TN3270E_DEVICE_TYPE, TN3270E_REQUEST, dtype, IAC, SE))
                                 else:
-                                        self.msg(1,">> IAC SB TN3270 TN3270E_DEVICE_TYPE TN3270E_REQUEST "+DEVICE_TYPE+" CONNECT "+self.connected_lu+" IAC SE")
-                                        self.send_data(_bytes(IAC, SB, options['TN3270E'], TN3270E_DEVICE_TYPE, TN3270E_REQUEST, DEVICE_TYPE, TN_CONNECT, self.connected_lu, IAC, SE))
+                                        self.msg(1,">> IAC SB TN3270 TN3270E_DEVICE_TYPE TN3270E_REQUEST "+dtype+" CONNECT "+self.connected_lu+" IAC SE")
+                                        self.send_data(_bytes(IAC, SB, options['TN3270E'], TN3270E_DEVICE_TYPE, TN3270E_REQUEST, dtype, TN_CONNECT, self.connected_lu, IAC, SE))
                 elif self.sb_options[1] == TN3270E_DEVICE_TYPE:
+                        if len(self.sb_options) < 3:
+                                self.msg(1,"TN3270E DEVICE_TYPE subnegotiation too short")
+                                return True
                         if self.sb_options[2] == TN3270E_REJECT:
                                 self.msg(1, 'Received TN3270E_REJECT after sending LU %s', self.connected_lu)
                                 return False
@@ -187,17 +217,25 @@ class TelnetMixin:
                 elif self.sb_options[1] == TN3270E_FUNCTIONS:
                         verb = self.sb_options[2] if len(self.sb_options) > 2 else None
                         if verb == TN3270E_IS:
-                                self.negotiated = True
-                                self.msg(1,"TN3270 Negotiation Complete!")
-                                self.in3270()
-                        elif verb == TN3270E_REQUEST:
-                                # Accept the host's function list (basic 3270E).
                                 funcs = bytes(self.sb_options[3:])
                                 se_at = funcs.find(bytes((SE,)))
                                 if se_at >= 0:
                                         funcs = funcs[:se_at]
+                                self.tn3270e_functions = set(funcs) & TN3270E_SUPPORTED_FUNCTIONS
+                                self.negotiated = True
+                                self.msg(1,"TN3270 Negotiation Complete!")
+                                self.in3270()
+                        elif verb == TN3270E_REQUEST:
+                                # Honor RESPONSES and SYSREQ. BIND_IMAGE is a
+                                # data type we parse, not a FUNCTIONS bit.
+                                funcs = bytes(self.sb_options[3:])
+                                se_at = funcs.find(bytes((SE,)))
+                                if se_at >= 0:
+                                        funcs = funcs[:se_at]
+                                accepted = bytes(b for b in funcs if b in TN3270E_SUPPORTED_FUNCTIONS)
+                                self.tn3270e_functions = set(accepted)
                                 self.msg(1,'>> IAC SB TN3270 TN3270E_FUNCTIONS TN3270E_IS IAC SE')
-                                self.send_data(_bytes(IAC, SB, options['TN3270E'], TN3270E_FUNCTIONS, TN3270E_IS, funcs, IAC, SE))
+                                self.send_data(_bytes(IAC, SB, options['TN3270E'], TN3270E_FUNCTIONS, TN3270E_IS, accepted, IAC, SE))
                                 self.negotiated = True
                                 self.in3270()
                         else:
@@ -215,31 +253,141 @@ class TelnetMixin:
 
         ## Also known as process_eor in x3270
         def process_data( self ):
-                """ Processes TN3270 data """
+                """Process one TN3270/TN3270E record.
+
+                3270-DATA is painted. BIND_IMAGE is parsed (best-effort) and
+                stored. UNBIND clears bind state. SSCP-LU and NVT are surfaced
+                in dedicated buffers. SCS is logged and ignored. If RESPONSES
+                was agreed, ALWAYS-RESPONSE records still get an ACK.
+                """
                 reply = 0
                 self.msg(1,"Processing TN3270 Data")
-        ## We currently don't support TN3270E but this is here for future expansion
-        ## J/K We totally do now! SoF 8/24/2016
                 if self.state == TN3270E_DATA:
+                        if len(self.tn_buffer) < 5:
+                                self.msg(1, "TN3270E header too short (%r bytes)", len(self.tn_buffer))
+                                self.tn_buffer = bytearray()
+                                return True
                         self.msg(1, 'Parsing TN3270E Header')
                         self.tn3270_header['data_type']   = self.tn_buffer[0]
                         self.tn3270_header['request_flag']  = self.tn_buffer[1]
                         self.tn3270_header['response_flag'] = self.tn_buffer[2]
                         self.tn3270_header['seq_number']    = bytes(self.tn_buffer[3:5])
-                        if self.tn3270_header['data_type'] == DT_3270_DATA: #3270_DATA
-                                reply = self.process_3270(self.tn_buffer[5:]) or 0
-                                self.raw_tn.append(bytes(self.tn_buffer[5:]))
+                        dtype = self.tn3270_header['data_type']
+                        payload = bytes(self.tn_buffer[5:])
+                        if dtype == DT_3270_DATA:
+                                self.sscp_mode = False
+                                reply = self.process_3270(payload) or 0
+                                self.raw_tn.append(payload)
+                        elif dtype == DT_BIND_IMAGE:
+                                self._handle_bind_image(payload)
+                        elif dtype == DT_UNBIND:
+                                self._handle_unbind(payload)
+                        elif dtype == DT_SSCP_LU_DATA:
+                                self._handle_sscp(payload)
+                        elif dtype == DT_NVT_DATA:
+                                self._handle_nvt(payload)
+                        elif dtype == DT_REQUEST:
+                                self.msg(1, "TN3270E REQUEST (0x%02x)",
+                                         payload[0] if payload else 0)
+                        elif dtype == DT_SCS_DATA:
+                                self.msg(1, "Ignoring SCS-DATA (printer sessions out of scope)")
+                        else:
+                                self.msg(1, "Ignoring TN3270E data type 0x%02x", dtype)
                         req = self.tn3270_header['request_flag']
-                        if reply in (BAD_COMMAND, BAD_ADDRESS) and req != NO_RESPONSE:
-                                self.tn3270e_nak(reply)
-                        elif reply == NO_OUTPUT and req == ALWAYS_RESPONSE:
-                                self.tn3270e_ack()
+                        if self._tn3270e_responses_on():
+                                if reply in (BAD_COMMAND, BAD_ADDRESS) and req != NO_RESPONSE:
+                                        self.tn3270e_nak(reply)
+                                elif req == ALWAYS_RESPONSE and reply != OUTPUT:
+                                        self.tn3270e_ack()
                 else:
                         reply = self.process_3270(self.tn_buffer) or 0
                         self.raw_tn.append(bytes(self.tn_buffer))
 
+                self._record_count = getattr(self, '_record_count', 0) + 1
                 self.tn_buffer = bytearray()
                 return  True
+
+        def _append_nvt( self, data ):
+                if isinstance(data, int):
+                        chunk = bytes((data & 0xff,))
+                else:
+                        chunk = bytes(data)
+                text = chunk.decode('latin1', 'replace')
+                self._nvt_buf = getattr(self, '_nvt_buf', '') + text
+
+        def _handle_bind_image( self, payload ):
+                parsed = parse_bind_image(payload)
+                self.bind_image = parsed['raw']
+                self.bind = parsed
+                if parsed.get('slu') and not getattr(self, 'connected_lu', ''):
+                        self.connected_lu = parsed['slu']
+                self.msg(1, "BIND_IMAGE PLU=%r SLU=%r size=%sx%s (%d bytes)",
+                         parsed.get('plu'), parsed.get('slu'),
+                         parsed.get('rows'), parsed.get('cols'), len(payload))
+
+        def _handle_unbind( self, payload ):
+                self.msg(1, "UNBIND type=%r", payload[:1])
+                self.bind_image = b''
+                self.bind = {
+                        'raw': b'', 'plu': '', 'slu': '',
+                        'rows': None, 'cols': None, 'logmode': '',
+                }
+                self.sscp_mode = False
+
+        def _handle_sscp( self, payload ):
+                self.sscp_mode = True
+                text = self._ebcdic_to_str(payload)
+                self._sscp_text = getattr(self, '_sscp_text', '') + text
+                self.msg(1, "SSCP-LU %d bytes: %r", len(payload), text[:80])
+
+        def _handle_nvt( self, payload ):
+                text = bytes(payload).decode('ascii', 'replace')
+                self._nvt_buf = getattr(self, '_nvt_buf', '') + text
+                self.msg(1, "NVT %d bytes: %r", len(payload), text[:80])
+
+        def get_sscp( self ):
+                """Decoded SSCP-LU text accumulated this session."""
+                return getattr(self, '_sscp_text', '')
+
+        def get_nvt( self ):
+                """NVT (ASCII) line buffer: pre-3270 telnet and DT_NVT."""
+                return getattr(self, '_nvt_buf', '')
+
+        def _iac_double( self, data ):
+                iac = bytes((IAC,))
+                out = bytearray()
+                for char in data:
+                        raw = _bytes(char)
+                        out.extend(raw.replace(iac, iac + iac))
+                return bytes(out)
+
+        def _next_tn3270e_seq( self ):
+                seq = getattr(self, 'header_sequence', 0) & 0xffff
+                self.header_sequence = (seq + 1) & 0xffff
+                return seq
+
+        def _tn3270e_header_bytes( self, data_type, request_flag=0, response_flag=0, seq=None ):
+                if seq is None:
+                        seq = self._next_tn3270e_seq()
+                hdr = bytes((
+                        data_type & 0xff,
+                        request_flag & 0xff,
+                        response_flag & 0xff,
+                        (seq >> 8) & 0xff,
+                        seq & 0xff,
+                ))
+                return self._iac_double(hdr)
+
+        def send_tn3270e_record( self, data_type, payload=b'', request_flag=0 ):
+                """Send one TN3270E record (header + payload + IAC EOR)."""
+                packet = bytearray()
+                packet.extend(self._tn3270e_header_bytes(data_type, request_flag))
+                packet.extend(self._iac_double(payload or b''))
+                packet.extend((IAC, TN_EOR))
+                self.send_data(bytes(packet))
+
+        def _tn3270e_responses_on( self ):
+                return TN3270E_FN_RESPONSES in getattr(self, 'tn3270e_functions', set())
 
         def _tn3270e_seq_for_reply( self ):
                 seq = self.tn3270_header['seq_number'] or b'\x00\x00'
@@ -281,25 +429,28 @@ class TelnetMixin:
                                 self.client_options.get(options['BINARY'], False) and
                                 self.client_options.get(options['TTYPE'], False)  ):
                         self.state = TN3270_DATA
-                if self.state == TN3270_DATA or self.state == TN3270E_DATA:
-                        ## since we're in TN3270 mode, let's create an empty buffer
+                now = self.state == TN3270_DATA or self.state == TN3270E_DATA
+                if now and not getattr(self, '_in_3270', False):
+                        ## first entry to 3270 mode: empty presentation space
+                        n = getattr(self, 'screen_size', SCREEN_SIZE)
                         self.msg(1,'Entering TN3270 Mode:')
                         self.msg(1,"\tCreating Empty IBM-3278-2 Buffer")
-                        self.buffer = bytearray(SCREEN_SIZE)
-                        self.fa_buffer = bytearray(SCREEN_SIZE)
-                        self.overwrite_buf = bytearray(SCREEN_SIZE)
-                        self.msg(1,"\tCreated buffers of length: %r", SCREEN_SIZE)
+                        self._alloc_buffers(n)
+                        self.msg(1,"\tCreated buffers of length: %r", n)
+                self._in_3270 = now
                 self.msg(1,"Current State: %r", WORD_STATE[self.state])
 
         def send_tn3270( self, data ):
                 """Sends tn3270 data: TN3270E header, IAC-doubled payload, IAC EOR."""
                 packet = bytearray()
                 if self.state == TN3270E_DATA:
-                        packet.extend(b'\x00\x00\x00\x00\x00')
+                        packet.extend(self._tn3270e_header_bytes(DT_3270_DATA))
                 iac = bytes((IAC,))
+                nbytes = 0
                 for char in data:
-                        self.msg(1,"Adding %r to the read buffer", char)
                         raw = _bytes(char)
                         packet.extend(raw.replace(iac, iac + iac))
+                        nbytes += len(raw)
                 packet.extend((IAC, TN_EOR))
+                self.msg(1, "send_tn3270 %d payload bytes", nbytes)
                 self.send_data(bytes(packet))

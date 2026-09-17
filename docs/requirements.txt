@@ -1,0 +1,5 @@
+# Local convenience. Read the Docs installs via `pip install .[docs]`.
+sphinx>=8.0
+myst-parser
+furo
+sphinx-autodoc-typehints

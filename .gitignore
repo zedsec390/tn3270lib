@@ -9,6 +9,9 @@ dist/
 *.egg-info/
 .eggs/
 
+# Sphinx
+docs/_build/
+
 # Virtual environments
 .venv/
 venv/

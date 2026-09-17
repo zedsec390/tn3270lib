@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tn3270lib"
+version = "0.3.0"
+description = "TN3270/TN3270E test-automation client for IBM 3270 sessions (z/OS, CICS, TSO)"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.8"
+authors = [{name = "Phil Young"}]
+keywords = ["tn3270", "3270", "mainframe", "z/OS", "CICS", "TSO"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications",
+    "Topic :: Software Development :: Testing",
+    "Topic :: System :: Networking",
+    "Topic :: Terminals",
+]
+
+[project.urls]
+Homepage = "https://tn3270lib.readthedocs.io"
+Documentation = "https://tn3270lib.readthedocs.io"
+
+[project.optional-dependencies]
+i18n = ["ebcdic"]
+docs = [
+    "sphinx>=8.0",
+    "myst-parser",
+    "furo",
+    "sphinx-autodoc-typehints",
+]
+
+[tool.setuptools]
+py-modules = ["tn3270lib"]
+packages = ["tn3270"]
+include-package-data = true

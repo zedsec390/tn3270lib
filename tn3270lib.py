@@ -8,8 +8,9 @@
 # >>> import tn3270lib
 # >>> tn3270 = tn3270lib.TN3270()
 # To connect to a host use the initiate function.
-# This library will attempt SSL first
-# then connect without ssl if that fails.
+# This library will attempt TLS first (legacy-permissive by default).
+# Plaintext is used only if you pass allow_plaintext=True or disable_ssl(True).
+# require_tls=True fails the connect when the handshake fails.
 # >>> host = "10.10.0.10"
 # >>> port = 23
 # >>> tn3270.initiate(host, port)
@@ -87,7 +88,8 @@ from tn3270.constants import *
 from tn3270.ebcdic import _ebcdic_to_str, _str_to_ebcdic
 from tn3270.transport import _bytes, _make_ssl_context
 from tn3270.indfile import _chunk_len
-from tn3270.client import TN3270
+from tn3270.client import TN3270, TN3270Timeout, TN3270KeyboardLocked
+from tn3270 import __version__  # noqa: F401
 
 
 def test():

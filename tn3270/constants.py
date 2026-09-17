@@ -32,10 +32,21 @@ TN_IS         = 4
 TN_REASON     = 5
 TN_REJECT     = 6
 TN_REQUEST    = 7
-TN_RESPONSES  = 2
 TN_SEND       = 8
 TN_TN3270     = 40
 TN_EOR        = 239 #End of Record
+
+# RFC 854 verbs that are not WILL/WONT/DO/DONT/SB/EOR. IAC + these
+# is ignored and the state machine returns to data (do not leave TNS_IAC).
+TELNET_NOP = 241
+TELNET_DM  = 242
+TELNET_BRK = 243
+TELNET_IP  = 244
+TELNET_AO  = 245
+TELNET_AYT = 246
+TELNET_EC  = 247
+TELNET_EL  = 248
+TELNET_GA  = 249
 
 # Supported Telnet Options (IANA / RFC 2355: option 40 is TN3270E).
 # options['TN3270'] is kept as an alias for 40 so existing wire lookups still
@@ -61,7 +72,7 @@ EW    = 5
 EWA   = 13
 RB    = 2
 RM    = 6
-RMA   = ''
+RMA   = 0x6E  # Read Modified All (same numeric value as SNA_RMA)
 W     = 1
 WSF   = 17
 NOP   = 3
@@ -202,12 +213,63 @@ NO_OUTPUT      = 0
 OUTPUT         = 1
 BAD_COMMAND    = 2
 BAD_ADDRESS    = 3
+# x3270 structured-field reject; same value as BAD_COMMAND
+PDS_BAD_CMD    = BAD_COMMAND
 NO_AID         = 0x60
 FA_MDT         = 0x01  # field modified-data tag
+FA_NUMERIC     = 0x10  # numeric-only unprotected field
 FA_PROTECTED   = 0x20
 WCC_RESET      = 0x40
 WCC_RESTORE    = 0x02  # keyboard restore
 WCC_RESET_MDT  = 0x01
+
+# Extended attributes: SA uses 0x41/0x42/0x43; SFE/MF use 0xC0/0xC1/0xC2/0xC3.
+XA_RESET       = 0x00
+XA_HIGHLIGHT   = 0x41
+XA_FGCOLOR     = 0x42
+XA_CHARSET     = 0x43
+SFE_FA         = 0xC0
+SFE_HIGHLIGHT  = 0xC1
+SFE_COLOR      = 0xC2
+SFE_CHARSET    = 0xC3
+
+# 3270 color values (Query Reply / SA / SFE).
+COLOR_DEFAULT    = 0x00
+COLOR_NEUTRAL    = 0xF0
+COLOR_BLUE       = 0xF1
+COLOR_RED        = 0xF2
+COLOR_PINK       = 0xF3
+COLOR_GREEN      = 0xF4
+COLOR_TURQUOISE  = 0xF5
+COLOR_YELLOW     = 0xF6
+COLOR_WHITE      = 0xF7
+
+COLOR_NAMES = {
+        COLOR_DEFAULT: 'default',
+        COLOR_NEUTRAL: 'neutral',
+        COLOR_BLUE: 'blue',
+        COLOR_RED: 'red',
+        COLOR_PINK: 'pink',
+        COLOR_GREEN: 'green',
+        COLOR_TURQUOISE: 'turquoise',
+        COLOR_YELLOW: 'yellow',
+        COLOR_WHITE: 'white',
+}
+
+# Extended highlighting.
+HL_DEFAULT     = 0x00
+HL_NORMAL      = 0xF0
+HL_BLINK       = 0xF1
+HL_REVERSE     = 0xF2
+HL_UNDERSCORE  = 0xF4
+
+HL_NAMES = {
+        HL_DEFAULT: 'default',
+        HL_NORMAL: 'default',
+        HL_BLINK: 'blink',
+        HL_REVERSE: 'reverse',
+        HL_UNDERSCORE: 'underscore',
+}
 
 
 
@@ -310,13 +372,28 @@ NEGOTIATING    = 0
 CONNECTED      = 1
 TN3270_DATA    = 2
 TN3270E_DATA   = 3
-#We only support 3270 model 2 wich was 24x80.
-#
-#DEVICE_TYPE    = "IBM-3278-2"
-#
-DEVICE_TYPE    = "IBM-3279-2-E"
-COLS           = 80 # hardcoded width.
-ROWS           = 24 # hardcoded rows.
+# IBM-3278-2-E is honest for this 24x80 emulator (model 2). A constructor
+# argument can override the telnet TTYPE / TN3270E device-type string.
+DEVICE_TYPE    = "IBM-3278-2-E"
+COLS           = 80 # default width (IBM-3278-2).
+ROWS           = 24 # default rows (IBM-3278-2).
+# Primary (default) and alternate sizes by 3270 model. Model 2 is 24x80
+# only; models 3/4/5 keep 24x80 primary and a larger alternate.
+DEVICE_MODEL_GEOMETRY = {
+        '2': ((24, 80), (24, 80)),
+        '3': ((24, 80), (32, 80)),
+        '4': ((24, 80), (43, 80)),
+        '5': ((24, 80), (27, 132)),
+}
+
+# Query Reply QCODEs we actually send.
+QR_SUMMARY            = 0x80
+QR_USABLE_AREA        = 0x81
+QR_CHARACTER_SETS     = 0x85
+QR_COLOR              = 0x86
+QR_HIGHLIGHTING       = 0x87
+QR_REPLY_MODES        = 0x88
+QR_IMPLICIT_PARTITION = 0xA6
 WORD_STATE     = ["Negotiating", "Connected", "TN3270 mode", "TN3270E mode"]
 TELNET_PORT    = 23
 
@@ -333,6 +410,22 @@ telnet_commands = {
         IS   : 'IS'
 }
 
+# TN3270E function codes (RFC 2355). These are NOT telnet option numbers;
+# putting RESPONSES=2 in telnet_options overwrote DEVICE_TYPE in debug prints.
+TN3270E_FN_BIND_IMAGE      = 0
+TN3270E_FN_DATA_STREAM_CTL = 1
+TN3270E_FN_RESPONSES       = 2
+TN3270E_FN_SCS_CTL_CODES   = 3
+TN3270E_FN_SYSREQ          = 4
+# SYSREQ as a 3270 AID (0xf0) remains available; the TN3270E *function*
+# is also advertised so z/VM and consoles can switch to SSCP-LU.
+TN3270E_SUPPORTED_FUNCTIONS = frozenset({
+        TN3270E_FN_RESPONSES,
+        TN3270E_FN_SYSREQ,
+})
+# Back-compat alias; do not add this to telnet_options (collides with DEVICE_TYPE).
+TN_RESPONSES = TN3270E_FN_RESPONSES
+
 telnet_options = {
         TN_ASSOCIATE  : 'ASSOCIATE',
         TN_CONNECT    : 'CONNECT',
@@ -342,7 +435,6 @@ telnet_options = {
         TN_REASON     : 'REASON',
         TN_REJECT     : 'REJECT',
         TN_REQUEST    : 'REQUEST',
-        TN_RESPONSES  : 'RESPONSES',
         TN_SEND       : 'SEND',
         TN_TN3270     : 'TN3270',
         TN_EOR        : 'EOR'

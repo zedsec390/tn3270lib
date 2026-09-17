@@ -3,6 +3,7 @@
 Kept apart from the rest of the client so host-side TSO quirks
 stay contained in this module."""
 
+import re
 import struct
 
 from .constants import *
@@ -14,8 +15,33 @@ def _chunk_len(chunk):
     return len(chunk)
 
 
+# Quoted fully-qualified DSN, or unquoted name: letters, digits, period, parens.
+_DSN_RE = re.compile(r"^(?:'[A-Za-z0-9.()]{1,56}'|[A-Za-z0-9.()]{1,56})$")
+
+
+def _valid_dataset(dataset):
+    """True if dataset cannot inject a TSO command through IND$FILE."""
+    if not isinstance(dataset, str) or not dataset:
+        return False
+    if any(c in dataset for c in ';\n\r|& \t'):
+        return False
+    return _DSN_RE.fullmatch(dataset) is not None
+
+
+def _chunk_len(chunk):
+    if isinstance(chunk, int):
+        return 1
+    return len(chunk)
+
+
 class IndFileMixin:
-        """Transfer files to and from the host with IND$FILE."""
+        """Transfer files to and from the host with IND$FILE.
+
+        IND$FILE runs under TSO, so `dataset` follows TSO naming rules: an
+        unquoted name is prefixed with the logged-on userid. Pass
+        "'PHIL.TN3270.TEXT'" (quotes included) to address a fully qualified
+        name; "PHIL.TN3270.TEXT" would become PHIL.PHIL.TN3270.TEXT.
+        """
 
         def file_transfer(self, data):
                 """ Handles Write Structured Fields file transfer requests 
@@ -82,12 +108,16 @@ class IndFileMixin:
                                 #We didn't get a message so it must be data!
                                 self.msg(1,"[WSF] File Transfer Insert: record number: %d | bytes: %d", self.recnum, my_len)
                                 bytes_writen = 0
-                                for i in received_data:
-                                        if self.ascii_file and (i == 0x0d or i == 0x1a):
-                                                continue
-                                        else:
-                                                bytes_writen += 1
-                                                self.file.write(i if isinstance(i, (bytes, bytearray)) else bytes((i,)))
+                                blob = received_data
+                                if isinstance(blob, (bytes, bytearray)):
+                                        pass
+                                else:
+                                        blob = bytes(blob)
+                                if self.ascii_file:
+                                        blob = bytes(b for b in blob if b not in (0x0d, 0x1a))
+                                if blob:
+                                        self.file.write(blob)
+                                        bytes_writen = len(blob)
                                 self.msg(1,"[WSF] File Transfer Insert: Bytes Writen: %d", bytes_writen)
                         self.msg(1,"[WSF] File Transfer Insert: Data Ack: record number: %d", self.recnum)
                         self.output_buffer = []
@@ -123,34 +153,7 @@ class IndFileMixin:
                         self.output_buffer.append(0)
                         self.output_buffer.append(SF_TRANSFER_DATA)
 
-                        while (not self.dft_eof) and (numbytes > 0):
-                                if self.ascii_file: #Reading an ascii file and replacing NL with LF/CR
-                                        self.msg(1,"[WSF] File Transfer ASCII: Reading one byte from %s", self.filename)
-                                        # Reads one byte from the file
-                                        # replace new lines with linefeed/carriage return
-                                        c = self.file.read(1)
-                                        if c == b"":
-                                                self.dft_eof = True
-                                                break
-                                        if c == b"\n":
-                                                temp_buf.append(b"\r")
-                                                temp_buf.append(b"\n")
-                                        else:
-                                                temp_buf.append(c)
-                                        numbytes = numbytes - 1
-                                        total_read = total_read + 1
-                                else:
-                                        self.msg(1,"[WSF] File Transfer Binary: Reading one byte from %s", self.filename)
-                                        # Reads one byte from the file
-                                        # replace new lines with linefeed/carriage return
-                                        c = self.file.read(1)
-                                        if c == b"":
-                                                self.dft_eof = True
-                                                break
-                                        else:
-                                                temp_buf.append(c)
-                                        numbytes = numbytes - 1
-                                        total_read = total_read + 1
+                        temp_buf, total_read, self.dft_eof = self._read_ft_chunk(numbytes)
                         if(total_read > 0):
                                 self.msg(1,"[WSF] File Transfer: Record Number: %d | Sent %d bytes", self.recnum, total_read)
                                 self.output_buffer.append(self.set_16(TR_GET_REPLY))
@@ -214,72 +217,133 @@ class IndFileMixin:
         def HIGH8(self, s):
                 return struct.pack(">B",(s >> 8 ) & 0xFF)
 
+        def _read_ft_chunk(self, numbytes):
+                """Read up to numbytes from the local file (ASCII NL -> CR/LF)."""
+                if getattr(self, 'dft_eof', False) or numbytes <= 0:
+                        return [], 0, True
+                if self.ascii_file:
+                        raw = self.file.read(max(1, numbytes // 2))
+                else:
+                        raw = self.file.read(numbytes)
+                if not raw:
+                        return [], 0, True
+                if self.ascii_file:
+                        out = raw.replace(b'\n', b'\r\n')
+                        if len(out) > numbytes:
+                                out = out[:numbytes]
+                else:
+                        out = raw
+                return [out], len(out), False
+
         def abort(self, code):
                 self.msg(1,"File Transfer - ABORT ABORT ABORT")
                 self.output_buffer = []
-                self.output_buffer.insert(AID_SF)
-                self.output_buffer.insert(self.set_16(9))
-                self.output_buffer.insert(SF_TRANSFER_DATA)
-                self.output_buffer.insert(self.HIGH8(code))
-                self.output_buffer.insert(TR_ERROR_REPLY)
-                self.output_buffer.insert(TR_ERROR_HDR)
-                self.output_buffer.insert(TR_ERR_CMDFAIL)
+                self.output_buffer.append(AID_SF)
+                self.output_buffer.append(self.set_16(9))
+                self.output_buffer.append(SF_TRANSFER_DATA)
+                self.output_buffer.append(self.HIGH8(code))
+                self.output_buffer.append(TR_ERROR_REPLY)
+                self.output_buffer.append(self.set_16(TR_ERROR_HDR))
+                self.output_buffer.append(self.set_16(TR_ERR_CMDFAIL))
                 self.send_tn3270(self.output_buffer)
                 self.output_buffer = []
                 self.ft_state = FT_NONE
 
+        def _drive_transfer(self, timeout=2, max_idle=8):
+                """Pump the DFT exchange until the host reports the transfer done.
+
+                Gives up once the host has been silent for max_idle rounds. Without
+                that bail-out a rejected IND$FILE command (bad data set name, IND$FILE
+                not installed) leaves the caller receiving forever with a live session
+                on the host.
+                """
+                idle = 0
+                while self.ft_state != FT_NONE:
+                        before = len(self.raw_tn)
+                        self.get_all_data(timeout)
+                        if len(self.raw_tn) == before:
+                                idle += 1
+                                if idle >= max_idle:
+                                        self.msg(1,"FILE TRANSFER: host stopped responding, abandoning transfer")
+                                        self.ft_state = FT_NONE
+                                        return False
+                        else:
+                                idle = 0
+                return True
+
         def send_ascii_file(self, dataset,filename):
                 """ Sends an ascii file using IND$FILE
                     This will replace NL with CL/RF """
-
+                if not _valid_dataset(dataset):
+                        self.msg(1,"FILE TRANSFER: rejected dataset name %r", dataset)
+                        return False
                 self.msg(1,"FILE TRANSFER: Writing %s to dataset %s at %s:%d in ASCII format", filename, dataset, self.host, self.port)
                 self.ft_state = FT_AWAIT_ACK
                 self.ascii_file = True
-                self.file = open(filename, "rb")
                 self.filename = filename
-                self.send_cursor("IND$FILE PUT "+dataset+" ASCII CRLF")
-                while self.ft_state != FT_NONE:
-                        self.get_all_data()
-                self.file.close()
-                #reset the ascii file flag incase we do a binary transfer next
-                self.ascii_file = False
+                try:
+                        with open(filename, "rb") as fh:
+                                self.file = fh
+                                self.send_cursor("IND$FILE PUT "+dataset+" ASCII CRLF")
+                                ok = self._drive_transfer()
+                finally:
+                        self.file = None
+                        self.ascii_file = False
+                return ok
 
         def send_binary_file(self, dataset,filename):
                 """ Sends a file using IND$FILE """
+                if not _valid_dataset(dataset):
+                        self.msg(1,"FILE TRANSFER: rejected dataset name %r", dataset)
+                        return False
                 self.msg(1,"FILE TRANSFER: Writing %s to dataset %s at %s:%d", filename, dataset, self.host, self.port)
                 self.ft_state = FT_AWAIT_ACK
                 self.ascii_file = False
-                self.file = open(filename, "rb")
                 self.filename = filename
-                self.send_cursor("IND$FILE PUT "+dataset)
-                while self.ft_state != FT_NONE:
-                        self.get_all_data()
-                self.file.close()
+                try:
+                        with open(filename, "rb") as fh:
+                                self.file = fh
+                                self.send_cursor("IND$FILE PUT "+dataset)
+                                ok = self._drive_transfer()
+                finally:
+                        self.file = None
+                return ok
 
         def get_ascii_file(self, dataset, filename):
                 """ Gets a dataset from the Mainframe using ASCII
-                    translation (mainframe does the translation) """ 
+                    translation (mainframe does the translation) """
+                if not _valid_dataset(dataset):
+                        self.msg(1,"FILE TRANSFER: rejected dataset name %r", dataset)
+                        return False
                 self.msg(1,"FILE TRANSFER: Getting dataset %s from %s:%d writing to %s as ASCII", dataset, self.host, self.port, filename)
                 self.ft_state = FT_AWAIT_ACK
                 self.ascii_file = True
-                self.file = open(filename, 'wb') # file object
                 self.filename = filename
-                self.send_cursor("IND$FILE GET "+dataset+" ASCII CRLF")
-                while self.ft_state != FT_NONE:
-                        self.get_all_data()
-                self.file.close()
-                #reset the ascii file flag incase we do a binary transfer next
-                self.ascii_file = False
+                try:
+                        with open(filename, 'wb') as fh:
+                                self.file = fh
+                                self.send_cursor("IND$FILE GET "+dataset+" ASCII CRLF")
+                                ok = self._drive_transfer()
+                finally:
+                        self.file = None
+                        self.ascii_file = False
+                return ok
 
         def get_binary_file(self, dataset, filename):
                 """ Gets a dataset from the mainframe without
                     any translation """
+                if not _valid_dataset(dataset):
+                        self.msg(1,"FILE TRANSFER: rejected dataset name %r", dataset)
+                        return False
                 self.msg(1,"FILE TRANSFER: Getting dataset %s from %s:%d writing to %s", dataset, self.host, self.port, filename)
                 self.ft_state = FT_AWAIT_ACK
                 self.ascii_file = False
-                self.file = open(filename, 'wb') # file object
                 self.filename = filename
-                self.send_cursor("IND$FILE GET "+dataset)
-                while self.ft_state != FT_NONE:
-                        self.get_all_data()
-                self.file.close()
+                try:
+                        with open(filename, 'wb') as fh:
+                                self.file = fh
+                                self.send_cursor("IND$FILE GET "+dataset)
+                                ok = self._drive_transfer()
+                finally:
+                        self.file = None
+                return ok
