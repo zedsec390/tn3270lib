@@ -5,6 +5,9 @@
 First public-facing release after the parser-hardening pass and the test-client
 API (phases A–C). Packaging, Sphinx docs, and Read the Docs config land here.
 
+Packaging uses setuptools 64+ with the pre-PEP-639 `license = {file = ...}`
+table so `pip install .` still works on Python 3.8 (setuptools 77 dropped 3.8).
+
 ### Datastream / parser
 
 - Buffer-address and order handling (including leftover SBA bytes after a

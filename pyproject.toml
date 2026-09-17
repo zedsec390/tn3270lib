@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=77"]
+# 77+ is PEP 639 only and dropped Python 3.8 (last 3.8 wheel is 75.3.x).
+requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,8 +8,7 @@ name = "tn3270lib"
 version = "0.3.0"
 description = "TN3270/TN3270E test-automation client for IBM 3270 sessions (z/OS, CICS, TSO)"
 readme = "README.md"
-license = "GPL-3.0-or-later"
-license-files = ["LICENSE"]
+license = {file = "LICENSE"}
 requires-python = ">=3.8"
 authors = [{name = "Phil Young"}]
 keywords = ["tn3270", "3270", "mainframe", "z/OS", "CICS", "TSO"]
